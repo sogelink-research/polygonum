@@ -3,6 +3,7 @@ pub mod pipeline;
 pub mod plane;
 pub mod point;
 pub mod polygon;
+pub mod traversal;
 
 pub use graph::*;
 pub use pipeline::*;
@@ -24,19 +25,13 @@ pub fn polygonalize(
             .partition()
             .apply(|subgraph| {
                 // constructs the polygons from each subgraph and filters them
-                polygon::filter(
-                    subgraph.segment().into_iter().collect(),
-                    minimum_area_projected,
-                )
+                polygon::filter(traversal::traverse(&subgraph), minimum_area_projected)
             })
     } else {
         // sequential processing
         pipeline::Pipeline::from(segments).apply(|graph| {
             // constructs the polygons from the graph and filters them
-            polygon::filter(
-                graph.segment().into_iter().collect(),
-                minimum_area_projected,
-            )
+            polygon::filter(traversal::traverse(&graph), minimum_area_projected)
         })
     }
 }

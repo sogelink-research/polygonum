@@ -3,7 +3,6 @@ CREATE OR REPLACE FUNCTION plrust.polygonalize(inputs TEXT[])
     LANGUAGE plrust STRICT
 AS $$
 [dependencies]
-    rayon = "1.10.0"
     polygonum = { git = "https://github.com/sogelink-research/polygonum.git" }
 [code]
     // once the table is created, call the routine as

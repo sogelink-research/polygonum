@@ -1,6 +1,7 @@
 use super::point::Point;
 
-use std::collections::{BTreeSet, HashSet};
+use hashbrown::HashSet;
+use std::collections::BTreeSet;
 
 /// A polygon is represented by an ordered set of vertices.
 pub struct Polygon {

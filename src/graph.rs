@@ -1,14 +1,143 @@
-use super::{
-    point::{Point, Segment},
-    polygon::Polygon,
-};
+use super::point::{Point, Segment};
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) struct PointGraph {
+    /// The adjacency list that represents the graph of points.
+    pub(super) adjacencies: HashMap<Point, HashSet<Point>>,
+}
+
+pub(super) struct PointSubGraph<'a> {
+    /// Reference to the main graph
+    pub(super) graph: &'a PointGraph,
+    pub(super) points: Option<HashSet<Point>>,
+}
+
+impl PointGraph {
+    /// Given a list of segments, it constructs the graph of all detected and connected points.
+    pub(super) fn from(segments: &[Segment]) -> Self {
+        // empty adjacency list of points
+        let mut adjacencies = HashMap::<Point, HashSet<Point>>::new();
+        // iterates over every segment
+        segments.iter().for_each(|&(u, v)| {
+            // adds the segment to the graph as an edge between the two points
+            adjacencies
+                .entry(u)
+                .and_modify(|to| {
+                    to.insert(v);
+                })
+                .or_insert(HashSet::from([v]));
+            // does the same for its flipped counterpart
+            adjacencies
+                .entry(v)
+                .and_modify(|to| {
+                    to.insert(u);
+                })
+                .or_insert(HashSet::from([u]));
+        });
+        // yields the constructed graph of points
+        Self { adjacencies }
+    }
+
+    /// Prunes the graph of points in-place by removing dead ends and related points and interconnections.
+    pub(super) fn prune(mut self) -> Self {
+        // detects the points which are dead ends and have degree equals to 1
+        let mut leaves = self
+            .adjacencies
+            .iter()
+            .filter(|(_, to)| to.len() == 1)
+            .map(|(&leaf, _)| leaf)
+            .collect::<HashSet<_>>();
+        // iteratively prunes the leaves until no dead ends are left
+        while !leaves.is_empty() {
+            // next round leaves
+            let mut updated = HashSet::<Point>::new();
+            // iteratively prunes each leaf
+            for leaf in &leaves {
+                // prune only if it was not pruned already
+                if self.adjacencies.contains_key(leaf) {
+                    // prunes the leaf from each of its connected neighboring points
+                    if let Some(&adjacent) = self.adjacencies[leaf].iter().next() {
+                        // the neighbor will be a new leaf if it was poorly connected
+                        if self.adjacencies[&adjacent].len() <= 2 {
+                            updated.insert(adjacent);
+                        }
+                        // removes the leaf from its neighbors' adjacencies
+                        self.adjacencies.entry(adjacent).and_modify(|to| {
+                            to.remove(leaf);
+                        });
+                    }
+                    // definitely removes the leaf
+                    self.adjacencies.remove(leaf);
+                }
+            }
+            // new leaves consequently resulting as a smaller subset of previous leaves
+            leaves = updated;
+        }
+        // pruned adjacency list of points
+        self
+    }
+
+    /// Constructs a slice of the graph based on a set of its points.
+    pub(super) fn subgraph(&self, points: HashSet<Point>) -> PointSubGraph {
+        PointSubGraph {
+            graph: self,
+            points: Some(points),
+        }
+    }
+
+    /// Constructs a slice of the graph with all points.
+    pub(super) fn fullgraph(&self) -> PointSubGraph {
+        PointSubGraph {
+            graph: self,
+            points: None,
+        }
+    }
+}
 
 /// This graph contains the edges between points as oriented segments.
 pub struct SegmentGraph {
     /// The adjacency list representation of the graph.
     pub(super) adjacencies: HashMap<Segment, HashSet<Segment>>,
+}
+
+impl SegmentGraph {
+    /// Constructs the graph from a list of source `points` and their `adjacencies`.
+    pub(super) fn from(subgraph: &PointSubGraph) -> SegmentGraph {
+        // the finally delivered adjacency list of segments
+        let mut graph = HashMap::<Segment, HashSet<Segment>>::new();
+        // for each considered `point` in `points`, it connects its ingoing segments to its outgoing segments
+        subgraph
+            .graph
+            .adjacencies
+            .iter()
+            .filter(|(&point, _)| {
+                subgraph
+                    .points
+                    .as_ref()
+                    .map_or(true, |values| values.contains(&point))
+            })
+            .for_each(|(&point, neighbors)| {
+                // using the `neighbors` of `point`, it links ingoing to outgoing segments
+                neighbors
+                    .iter()
+                    .flat_map(|x| std::iter::repeat(x).zip(neighbors))
+                    .for_each(|(&from, &to)| {
+                        // obviously avoids creating unwanted cycles
+                        if from != to {
+                            graph
+                                .entry((from, point))
+                                .and_modify(|segments| {
+                                    segments.insert((point, to));
+                                })
+                                .or_insert(HashSet::from([(point, to)]));
+                        }
+                    });
+            });
+        // instantiate the segment graph from its adjacency list
+        SegmentGraph { adjacencies: graph }
+    }
 }
 
 impl std::hash::Hash for SegmentGraph {
@@ -19,143 +148,5 @@ impl std::hash::Hash for SegmentGraph {
             .map(|(&segment, successor)| (segment, successor.iter().collect::<BTreeSet<_>>()))
             .collect::<BTreeMap<_, _>>()
             .hash(state);
-    }
-}
-
-/// The result of the recursive graph traversal when constructing its faces, namely polygons.
-enum TraversalResult {
-    /// When backtracking to previous recursion level because the current segment has already been explored.
-    Backtracking,
-    /// When exhausting a specific recursion level on a segment by fully visiting it.
-    Exploring,
-    /// When a new path has been closed and a new polygon has been construced.
-    PathClosing,
-}
-
-impl SegmentGraph {
-    /// Constructs a set of unique polygons from the graph by performing a composite graph traversal.
-    ///
-    /// The inexact procedure is pretty efficient because it does not instantiate a branching recursion tree.
-    /// This means that the complexity is `O(E * k)` where `E` is the total number of connections between all
-    /// segments and `k` is the average polygon's size. This ensures that the complexity is always polynomial
-    /// and NEVER degenerates to exponential by design. Moreover, two different criteria are employed to chose
-    /// on which segment to recur when following a path. First, we pick the next segment minimizing the pair
-    /// `(theta, coplanarity)` where `theta` is the clockwise angle between the current segment and the next
-    /// candidate projected on the xy plane whereas coplanarity is the area of the tetrahedron considering the
-    /// four points belonging to the previous segment, the current one and the next candidate. Second, we repeat
-    /// the recursive traversal by constructing other polygons using as criterion the minimization of the opposite
-    /// pair, that is `(coplanarity, theta)`. This helps identifies polygons that vertically overlap but are distinct.
-    pub fn segment(&self) -> HashSet<Polygon> {
-        // recursion stack to keep track of the visited segments
-        let mut stack = Vec::<Segment>::new();
-        // to keep track of visited the vertices and rapidly lookup their level in the recursion stack
-        let mut depth = HashMap::<Segment, usize>::new();
-        // saves polygons as closed paths
-        let mut paths = HashSet::<Polygon>::new();
-        // iteratively begins from every segment as uses the first criterion in the recursive traversal
-        for (source, successors) in &self.adjacencies {
-            // the source is put at the base of the recursion stack
-            depth.insert(*source, 0);
-            stack.push(*source);
-            // naively tries every successor to have a `previous` segment in further recursive calls
-            for successor in successors {
-                // recursive traversal
-                self.traverse(
-                    successor,
-                    source,
-                    |previous, current, next| {
-                        (
-                            super::plane::theta(current, next),
-                            super::plane::coplanarity(previous.0, current.0, current.1, next.1),
-                        )
-                    },
-                    &mut stack,
-                    &mut depth,
-                    &mut paths,
-                );
-            }
-            // at debug time verifies that the source is still at the root of the recursion stack
-            debug_assert_eq!(stack.len(), 1);
-            debug_assert_eq!(depth.len(), 1);
-            // iteratively begins from every segment as uses the second criterion in the recursive traversal
-            for successor in successors {
-                // new traversal to detect overlaying polygons
-                self.traverse(
-                    successor,
-                    source,
-                    |previous, current, next| {
-                        (
-                            super::plane::coplanarity(previous.0, current.0, current.1, next.1),
-                            super::plane::theta(current, next),
-                        )
-                    },
-                    &mut stack,
-                    &mut depth,
-                    &mut paths,
-                );
-            }
-            // removes the source from the root of the stack
-            if let Some(segment) = stack.pop() {
-                depth.remove(&segment);
-            }
-            // ensures that the recursion stack is empty
-            debug_assert_eq!(stack.len(), 0);
-            debug_assert_eq!(depth.len(), 0);
-        }
-        // yields found polygons
-        paths
-    }
-
-    /// Recursive traversal of `current` segment from `previous` where the minimization of `criterion(previous, current, candidate)`
-    /// is employed to choose which candidate will be next in the recursion traversal.
-    fn traverse<F, T>(
-        &self,
-        current: &Segment,
-        previous: &Segment,
-        criterion: F,
-        stack: &mut Vec<Segment>,
-        depth: &mut HashMap<Segment, usize>,
-        paths: &mut HashSet<Polygon>,
-    ) -> TraversalResult
-    where
-        F: Fn(&Segment, &Segment, &Segment) -> T,
-        T: PartialOrd,
-    {
-        if depth.contains_key(&(current.1, current.0)) {
-            // we are traversing an already explored segment by walking on it in the opposite sense thus we must backtrack
-            TraversalResult::Backtracking
-        } else if let Some(&position) = depth.get(current) {
-            // we are visiting an already visited segment, this means we are closing a path
-            paths.insert(Polygon::from(
-                stack[position..]
-                    .iter()
-                    .map(|segment| segment.0)
-                    .collect::<Vec<Point>>(),
-            ));
-            // we save the detected polygon and we go back one level
-            TraversalResult::PathClosing
-        } else {
-            // otherwise we explore the new segment by pushing it onto the stack
-            if let Some(last) = stack.last() {
-                depth.insert(*current, depth[last] + 1);
-                stack.push(*current);
-            }
-            // chooses the next segment that minimizes the criterion
-            if let Some(successor) = self.adjacencies[current]
-                .iter()
-                .map(|segment| (*segment, criterion(previous, current, segment)))
-                .min_by(|(_, alpha), (_, beta)| alpha.partial_cmp(beta).unwrap())
-                .map(|(successor, _)| successor)
-            {
-                // and recursively traverses it
-                self.traverse(&successor, current, criterion, stack, depth, paths);
-            }
-            // removes `segment` which corresponds to `current` from the recursion stack
-            if let Some(segment) = stack.pop() {
-                depth.remove(&segment);
-            }
-            // `current` has been exhaustively explored and we can go back one level
-            TraversalResult::Exploring
-        }
     }
 }
