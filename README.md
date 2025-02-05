@@ -2,27 +2,26 @@
 
 Polygonum is a Rust-powered crate to construct approximately-bidimensional polygons from a set of three dimensional lines.
 
-## Design
-
-The design of the whole pipeline used by Polygonum to construct a set of polygons from a set of segments is illustrated down below.
-
-![pipeline](resources/images/polygonum-pipeline.png)
-
 ## Installation
 
-Assuming you have Cargo and Rust installed, just place yourself into your project's directory and type as follows.
+To add Polygonum to your Rust project's dependecies, just place yourself into your project's directory and type as follows.
 
 ```sh
 cargo add --git "https://github.com/sogelink-research/polygonum.git"
 ```
 
-This will add Polygonum to your Rust project's dependecies.
+Or alternatively add the following line to your `Cargo.toml` file.
 
-## Example
+```toml
+[dependencies]
+polygonum = { git = "https://github.com/sogelink-research/polygonum.git" }
+```
 
-The following example illustartes how Polygonum digests a GeoJSON dataset and constructs the Polygon geometries from its LineString geometries. Finally, we show how these are display in well-known text format.
+## Usage
 
-```rust
+The following example illustartes how Polygonum digests a GeoJSON dataset and constructs the Polygon geometries from its LineString geometries. Finally, we display these in well-known text format.
+
+```rust title="main.rs"
 use polygonum;
 
 fn main() {
@@ -97,10 +96,25 @@ fn parse(filename: &str) -> Vec<polygonum::Segment> {
 }
 ```
 
-## Performance
+To compile and run the previous code snippet, inside within the project directory, type as follows.
 
-::TODO
+```sh
+cargo run
+```
+
+## Design
+
+The design of the whole pipeline used by Polygonum to construct a set of polygons from a set of segments is illustrated down below.
+
+![pipeline](resources/images/polygonum-pipeline.png)
 
 ## Dependencies
 
-::TODO
+We use the following dependencies in our implementation.
+
+- [Rayon](https://github.com/rayon-rs/rayon) is leveraged to parallelize the pipeline due to the graph partitioning into independent subgraphs.
+- [Hashbrown](https://github.com/rust-lang/hashbrown) is employed to achieve faster hashing when using hash maps or sets.
+
+---
+
+Authored by [Emanuel Buttaci](https://github.com/buttaciemanuel), reach me at emanuel.buttaci@sogelink.com.
